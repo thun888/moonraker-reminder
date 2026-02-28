@@ -4,6 +4,7 @@ Moonraker Printer Status Reminder
 监控 Moonraker 打印机状态并在状态变化时发送通知
 """
 
+import sys
 import time
 import yaml
 import requests
@@ -15,12 +16,29 @@ from pystray import Icon, Menu, MenuItem
 from PIL import Image, ImageDraw
 import logging
 
+# Windows 注册表支持（仅 Windows）
+try:
+    import winreg
+    WINDOWS = True
+except ImportError:
+    WINDOWS = False
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+status_mapping = {
+    'standby': '待机',
+    'printing': '正在打印',
+    'paused': '已暂停',
+    'complete': '已完成',
+    'error': '错误',
+    'idle': '空闲',
+    'cancelled': '已取消'
+}
 
 
 class PrinterMonitor:
@@ -34,6 +52,66 @@ class PrinterMonitor:
         self.dnd_mode = False  # 免打扰模式
         self.icon = None
         self.load_config()
+
+    # ------------------------------------------------------------------
+    # 开机自启动（仅 Windows）
+    # ------------------------------------------------------------------
+    APP_NAME = 'MoonrakerReminder'
+    REG_KEY   = r'Software\Microsoft\Windows\CurrentVersion\Run'
+
+    def _get_startup_cmd(self) -> str:
+        """返回写入注册表的启动命令"""
+        if getattr(sys, 'frozen', False):
+            # 以编译后的 .exe 运行
+            return f'"{sys.executable}"'
+        else:
+            # 以脚本运行
+            script = Path(sys.argv[0]).resolve()
+            return f'"{sys.executable}" "{script}"'
+
+    def is_autostart_enabled(self) -> bool:
+        """检查是否已设置开机自启动"""
+        if not WINDOWS:
+            return False
+        try:
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, self.REG_KEY, 0,
+                winreg.KEY_READ
+            )
+            value, _ = winreg.QueryValueEx(key, self.APP_NAME)
+            winreg.CloseKey(key)
+            return value == self._get_startup_cmd()
+        except (FileNotFoundError, OSError):
+            return False
+
+    def set_autostart(self, enabled: bool):
+        """启用或禁用开机自启动"""
+        if not WINDOWS:
+            logger.warning('开机自启动仅支持 Windows')
+            return
+        try:
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, self.REG_KEY, 0,
+                winreg.KEY_SET_VALUE
+            )
+            if enabled:
+                winreg.SetValueEx(key, self.APP_NAME, 0, winreg.REG_SZ,
+                                  self._get_startup_cmd())
+                logger.info('已开启开机自启动')
+            else:
+                try:
+                    winreg.DeleteValue(key, self.APP_NAME)
+                    logger.info('已关闭开机自启动')
+                except FileNotFoundError:
+                    pass
+            winreg.CloseKey(key)
+        except OSError as e:
+            logger.error(f'设置开机自启动失败: {e}')
+
+    def on_autostart_clicked(self, icon, item):
+        """开机自启动菜单点击回调"""
+        self.set_autostart(not self.is_autostart_enabled())
+        self.update_menu()
         
     def load_config(self):
         """加载配置文件"""
@@ -70,7 +148,7 @@ class PrinterMonitor:
         
         url = f"{host}/printer/objects/query?print_stats=state&display_status=progress"
         headers = {'X-Api-Key': api_key}
-        timeout = 5
+        timeout = 9
         
         # 尝试主机
         try:
@@ -161,9 +239,9 @@ class PrinterMonitor:
                     if isinstance(status, dict):
                         state = status.get('state', 'unknown')
                         progress = status.get('progress', 0)
-                        status_text = f"{state}"
+                        status_text = f"{status_mapping.get(state, state)}"
                         if state == "printing":
-                            status_text += f" ({progress*100:.0f}%)"
+                            status_text += f" (进度：{progress*100:.0f}%)"
                     else:
                         status_text = str(status)
                 
@@ -184,6 +262,12 @@ class PrinterMonitor:
                     "免打扰模式",
                     self.on_dnd_clicked,
                     checked=lambda item: self.dnd_mode
+                ),
+                MenuItem(
+                    "开机自启动",
+                    self.on_autostart_clicked,
+                    checked=lambda item: self.is_autostart_enabled(),
+                    visible=WINDOWS
                 ),
                 MenuItem("退出", self.on_exit_clicked)
             ]
@@ -218,9 +302,9 @@ class PrinterMonitor:
                     # 发送通知（除非在免打扰模式）
                     if not self.dnd_mode:
                         progress = current_status['progress']
-                        message = f"当前状态: {current_state}"
-                        if current_state == 'printing':
-                            message += f"\n进度: {progress*100:.1f}%"
+                        message = f"当前状态: {status_mapping.get(current_state, current_state)}"
+                        # if current_state == 'printing':
+                        #     message += f"\n进度: {progress*100:.1f}%"
                         
                         self.send_notification(
                             f"{name}",
