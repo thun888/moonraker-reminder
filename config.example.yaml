@@ -1,0 +1,8 @@
+# Moonraker Reminder 配置文件
+# 配置你要监控的打印机
+
+printers:
+  - name: "Printer"              # 打印机名称
+    host: "http://172.22.228.68"  # 主机地址
+    backup_host: "http://172.22.228.68"  # 备用主机地址（可选）
+    api_key: ""  # API 密钥

@@ -1,0 +1,7 @@
+main.dist
+main.onefile-build
+main.build
+.vscode
+*.zip
+*.exe
+config.yaml
