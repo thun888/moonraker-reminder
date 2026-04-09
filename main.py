@@ -165,7 +165,7 @@ class PrinterMonitor:
         # 尝试备用主机
         if backup_host:
             try:
-                url = f"{backup_host}/printer/objects/query?print_stats=state&display_status=progress"
+                url = f"{backup_host}/printer/objects/query?print_stats=state&display_status=progress&hall_filament_width_sensor"
                 logger.debug(f"正在查询 {name} 备用主机 ({backup_host})")
                 response = requests.get(url, headers=headers, timeout=timeout)
                 response.raise_for_status()
@@ -288,8 +288,9 @@ class PrinterMonitor:
         for printer in self.printers:
             name = printer.get('name', 'Unknown')
             current_status = self.query_printer(printer)
-            
             if current_status:
+                filament_width = current_status.get('hall_filament_width_sensor', {}).get('Diameter')
+                
                 current_state = current_status['state']
                 # 获取旧状态
                 previous_data = self.printer_states.get(name)
@@ -312,6 +313,17 @@ class PrinterMonitor:
                             timeout=10
                         )
                 
+                # 检测耗材情况
+                if filament_width is not None and filament_width < 0.5:
+                    logger.warning(f"{name} 耗材可能不足 (当前直径: {filament_width:.2f}mm)")
+                    if not self.dnd_mode:
+                        self.send_notification(
+                            f"{name} 耗材警告",
+                            f"耗材可能不足 (当前直径: {filament_width:.2f}mm)",
+                            timeout=60
+                        )
+
+
                 # 更新状态
                 self.printer_states[name] = current_status
         

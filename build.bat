@@ -1,0 +1,1 @@
+python -m nuitka --standalone --onefile --windows-console-mode=disable --windows-icon-from-ico=icon.ico --include-data-file=icon.ico=icon.ico main.py
